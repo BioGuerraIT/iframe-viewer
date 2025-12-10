@@ -1,13 +1,25 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useMemo } from "react";
 import * as XLSX from "xlsx";
+import { DataGrid } from "react-data-grid";
+import "react-data-grid/lib/styles.css";
 
 interface SpreadsheetViewerProps {
   filePath: string;
   frozenColumns?: number;
+  frozenRows?: number;
 }
 
-const SpreadsheetViewer = ({ filePath, frozenColumns = 1 }: SpreadsheetViewerProps) => {
-  const [data, setData] = useState<string[][]>([]);
+type CellValue = string | number | boolean | null | undefined;
+
+interface RowData {
+  [key: string]: CellValue;
+}
+
+const SpreadsheetViewer = ({ 
+  filePath, 
+  frozenColumns = 1, 
+}: SpreadsheetViewerProps) => {
+  const [rawData, setRawData] = useState<CellValue[][]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [sheets, setSheets] = useState<string[]>([]);
@@ -27,8 +39,11 @@ const SpreadsheetViewer = ({ filePath, frozenColumns = 1 }: SpreadsheetViewerPro
         setActiveSheet(wb.SheetNames[0]);
         
         const firstSheet = wb.Sheets[wb.SheetNames[0]];
-        const jsonData = XLSX.utils.sheet_to_json<string[]>(firstSheet, { header: 1 });
-        setData(jsonData);
+        const jsonData = XLSX.utils.sheet_to_json<CellValue[]>(firstSheet, { 
+          header: 1,
+          defval: ""
+        });
+        setRawData(jsonData);
         setLoading(false);
       } catch (err) {
         setError("Failed to load spreadsheet");
@@ -43,9 +58,47 @@ const SpreadsheetViewer = ({ filePath, frozenColumns = 1 }: SpreadsheetViewerPro
     if (!workbook) return;
     setActiveSheet(sheetName);
     const sheet = workbook.Sheets[sheetName];
-    const jsonData = XLSX.utils.sheet_to_json<string[]>(sheet, { header: 1 });
-    setData(jsonData);
+    const jsonData = XLSX.utils.sheet_to_json<CellValue[]>(sheet, { 
+      header: 1,
+      defval: ""
+    });
+    setRawData(jsonData);
   };
+
+  const { columns, rows } = useMemo(() => {
+    if (rawData.length === 0) return { columns: [], rows: [] };
+
+    const maxCols = Math.max(...rawData.map(row => row?.length || 0));
+    
+    // Generate column letters (A, B, C, ..., Z, AA, AB, ...)
+    const getColName = (index: number): string => {
+      let name = "";
+      let i = index;
+      while (i >= 0) {
+        name = String.fromCharCode(65 + (i % 26)) + name;
+        i = Math.floor(i / 26) - 1;
+      }
+      return name;
+    };
+
+    const cols = Array.from({ length: maxCols }, (_, i) => ({
+      key: `col${i}`,
+      name: getColName(i),
+      frozen: i < frozenColumns,
+      width: 120,
+      resizable: true,
+    }));
+
+    const rowsData: RowData[] = rawData.map((row, rowIndex) => {
+      const rowObj: RowData = { id: rowIndex };
+      for (let i = 0; i < maxCols; i++) {
+        rowObj[`col${i}`] = row?.[i] ?? "";
+      }
+      return rowObj;
+    });
+
+    return { columns: cols, rows: rowsData };
+  }, [rawData, frozenColumns]);
 
   if (loading) {
     return (
@@ -63,21 +116,19 @@ const SpreadsheetViewer = ({ filePath, frozenColumns = 1 }: SpreadsheetViewerPro
     );
   }
 
-  const maxCols = Math.max(...data.map(row => row?.length || 0));
-
   return (
     <div className="flex flex-col gap-4">
       {/* Sheet tabs */}
       {sheets.length > 1 && (
-        <div className="flex gap-1 flex-wrap">
+        <div className="flex gap-1 flex-wrap border-b border-border pb-2">
           {sheets.map((sheet) => (
             <button
               key={sheet}
               onClick={() => handleSheetChange(sheet)}
-              className={`px-3 py-1.5 text-sm rounded-md transition-colors ${
+              className={`px-4 py-2 text-sm rounded-t-md transition-colors border-b-2 ${
                 activeSheet === sheet
-                  ? "bg-primary text-primary-foreground"
-                  : "bg-muted text-muted-foreground hover:bg-muted/80"
+                  ? "bg-card border-primary text-foreground font-medium"
+                  : "bg-muted/50 border-transparent text-muted-foreground hover:bg-muted hover:text-foreground"
               }`}
             >
               {sheet}
@@ -86,59 +137,23 @@ const SpreadsheetViewer = ({ filePath, frozenColumns = 1 }: SpreadsheetViewerPro
         </div>
       )}
 
-      {/* Spreadsheet container */}
-      <div className="relative overflow-auto border border-border rounded-lg bg-card max-h-[600px]">
-        <table className="border-collapse min-w-full">
-          <tbody>
-            {data.map((row, rowIndex) => (
-              <tr key={rowIndex} className={rowIndex === 0 ? "bg-muted/50" : ""}>
-                {/* Row number */}
-                <td
-                  className="sticky left-0 z-20 bg-muted border border-border px-2 py-1 text-xs text-muted-foreground text-center min-w-[40px]"
-                  style={{ boxShadow: "2px 0 4px rgba(0,0,0,0.1)" }}
-                >
-                  {rowIndex + 1}
-                </td>
-                
-                {/* Data cells */}
-                {Array.from({ length: maxCols }).map((_, colIndex) => {
-                  const cellValue = row?.[colIndex] ?? "";
-                  const isFrozen = colIndex < frozenColumns;
-                  const isHeader = rowIndex === 0;
-                  
-                  return (
-                    <td
-                      key={colIndex}
-                      className={`border border-border px-2 py-1 text-sm whitespace-nowrap ${
-                        isHeader ? "font-semibold bg-muted/50" : "bg-card"
-                      } ${isFrozen ? "sticky z-10" : ""}`}
-                      style={
-                        isFrozen
-                          ? {
-                              left: `${40 + colIndex * 150}px`,
-                              minWidth: "150px",
-                              maxWidth: "200px",
-                              backgroundColor: isHeader ? "hsl(var(--muted))" : "hsl(var(--card))",
-                              boxShadow: colIndex === frozenColumns - 1 ? "2px 0 4px rgba(0,0,0,0.1)" : undefined,
-                            }
-                          : { minWidth: "100px" }
-                      }
-                    >
-                      <div className="truncate" title={String(cellValue)}>
-                        {String(cellValue)}
-                      </div>
-                    </td>
-                  );
-                })}
-              </tr>
-            ))}
-          </tbody>
-        </table>
+      {/* Data Grid */}
+      <div className="border border-border rounded-lg overflow-hidden" style={{ height: 500 }}>
+        <DataGrid
+          columns={columns}
+          rows={rows}
+          rowKeyGetter={(row) => row.id as number}
+          className="rdg-light"
+          style={{ height: "100%" }}
+        />
       </div>
 
       {/* Info */}
-      <div className="text-xs text-muted-foreground">
-        {data.length} rows × {maxCols} columns • {frozenColumns} frozen column(s)
+      <div className="flex justify-between items-center text-xs text-muted-foreground">
+        <span>{rows.length} rows × {columns.length} columns</span>
+        <span>
+          {frozenColumns} frozen column(s) • Click cells to select • Drag to resize columns
+        </span>
       </div>
     </div>
   );
