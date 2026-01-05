@@ -4,6 +4,7 @@ import {
   ColDef, 
   GridReadyEvent,
   CellValueChangedEvent,
+  CellClickedEvent,
   ModuleRegistry,
   ClientSideRowModelModule,
   TextFilterModule,
@@ -52,6 +53,7 @@ const DataGrid = () => {
   const [columnDefs, setColumnDefs] = useState<ColDef[]>([]);
   const [selectedRows, setSelectedRows] = useState<RowData[]>([]);
   const [fileName, setFileName] = useState<string>('');
+  const [cellStats, setCellStats] = useState<{ sum: number; count: number; avg: number } | null>(null);
 
   const defaultColDef = useMemo<ColDef>(() => ({
     sortable: true,
@@ -161,6 +163,42 @@ const DataGrid = () => {
     const selectedData = selectedNodes?.map(node => node.data).filter(Boolean) as RowData[];
     setSelectedRows(selectedData || []);
   }, []);
+
+  // Calculate stats from selected rows
+  const calculateStats = useCallback(() => {
+    if (selectedRows.length === 0) {
+      setCellStats(null);
+      return;
+    }
+
+    let sum = 0;
+    let count = 0;
+
+    selectedRows.forEach(row => {
+      Object.values(row).forEach(value => {
+        const numValue = parseFloat(String(value));
+        if (!isNaN(numValue)) {
+          sum += numValue;
+          count++;
+        }
+      });
+    });
+
+    if (count > 0) {
+      setCellStats({
+        sum: Math.round(sum * 100) / 100,
+        count,
+        avg: Math.round((sum / count) * 100) / 100
+      });
+    } else {
+      setCellStats(null);
+    }
+  }, [selectedRows]);
+
+  // Update stats when selection changes
+  useMemo(() => {
+    calculateStats();
+  }, [selectedRows, calculateStats]);
 
   const addRow = useCallback(() => {
     if (columnDefs.length === 0) {
@@ -316,6 +354,15 @@ const DataGrid = () => {
         </Button>
 
         <div className="ml-auto flex items-center gap-4 text-sm text-muted-foreground">
+          {cellStats && (
+            <span className="flex items-center gap-3 px-3 py-1.5 bg-primary/10 rounded-md font-medium text-primary">
+              <span>Soma: {cellStats.sum.toLocaleString('pt-BR')}</span>
+              <span className="text-primary/50">|</span>
+              <span>Média: {cellStats.avg.toLocaleString('pt-BR')}</span>
+              <span className="text-primary/50">|</span>
+              <span>Células: {cellStats.count}</span>
+            </span>
+          )}
           {fileName && (
             <span className="flex items-center gap-2">
               <FileSpreadsheet className="h-4 w-4" />
@@ -344,7 +391,6 @@ const DataGrid = () => {
           undoRedoCellEditing={true}
           undoRedoCellEditingLimit={20}
           stopEditingWhenCellsLoseFocus={true}
-          suppressRowClickSelection={true}
           rowHeight={42}
           headerHeight={48}
         />
